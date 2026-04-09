@@ -1,5 +1,42 @@
 # go-ops-agent
 
+一个 Linux 优先的终端运维助手。当前版本支持：
+
+- 使用 [`github.com/sashabaranov/go-openai`](go.mod) 连接兼容 OpenAI Chat Completions 的模型服务。
+- 使用 [`github.com/shirou/gopsutil/v3`](go.mod) 采集 CPU、内存和 Top 5 进程信息。
+- 使用 [`github.com/pterm/pterm`](go.mod) 提供 Spinner、彩色提示和终端渲染。
+- [`ops-agent ask`](cmd/ask.go) 打印 AI 回复，并在发现 ```bash``` 代码块时要求用户确认后执行。
+- [`ops-agent diag`](cmd/diag.go) 自动采集主机指标和最近 100 行日志，请 AI 基于真实数据做诊断。
+
+## 配置
+
+默认读取 `C:/Users/<you>/.ops-agent.yaml` 或环境变量：
+
+```yaml
+provider:
+  base_url: https://api.deepseek.com
+  api_key: your-api-key
+  model: deepseek-chat
+```
+
+也可使用环境变量覆盖：
+
+- `OPS_AGENT_BASE_URL`
+- `OPS_AGENT_API_KEY`
+- `OPS_AGENT_MODEL`
+
+## Linux 行为说明
+
+- 系统日志优先读取 `/var/log/syslog`。
+- 若 syslog 不可用，则回退到 `journalctl -n 100 --no-pager`。
+- 当问题包含 OOM 或“内存溢出”时，会优先提取 OOM 相关日志行再交给模型分析。
+
+## 安全执行机制
+
+- 模型若返回 `bash` 代码块，将由 [`internal/executor/executor.go`](internal/executor/executor.go) 提取。
+- 执行前会显示“警告：即将执行以下系统级命令，是否继续？(Y/N)”。
+- 只有用户明确输入 `Y` 或 `YES` 才会通过 `bash -lc` 执行命令并回显输出。
+
 `go-ops-agent` 是一个面向终端场景的运维辅助 CLI，目标是把本机诊断信息采集、LLM 分析与后续执行建议串起来，形成一个轻量的 AI Ops Assistant。
 
 当前仓库已经完成了基础命令行骨架、配置加载能力以及若干核心模块的数据结构定义，适合继续向“可实际诊断与回答运维问题”的方向迭代。
