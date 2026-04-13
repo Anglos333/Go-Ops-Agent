@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -41,7 +42,12 @@ func newAskCmd() *cobra.Command {
 			pterm.DefaultBox.WithTitle("AI 回复").Println(resp)
 
 			commands := executor.ExtractCommands(resp)
-			approved, err := executor.ConfirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), commands)
+			plan, err := executor.ReviewCommands(commands)
+			if err != nil {
+				return fmt.Errorf("AI 返回了未通过安全审查的命令: %w", err)
+			}
+
+			approved, err := executor.ConfirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
 			if err != nil {
 				return err
 			}
@@ -51,7 +57,7 @@ func newAskCmd() *cobra.Command {
 			}
 
 			pterm.Success.Println("开始执行 AI 建议的命令")
-			return executor.RunCommands("bash", os.Stdout, commands)
+			return executor.RunPlan(os.Stdout, plan)
 		},
 	}
 

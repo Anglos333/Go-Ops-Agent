@@ -61,7 +61,12 @@ func newDiagCmd() *cobra.Command {
 			pterm.DefaultBox.WithTitle("AI 诊断").Println(resp)
 
 			commands := executor.ExtractCommands(resp)
-			approved, err := executor.ConfirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), commands)
+			plan, err := executor.ReviewCommands(commands)
+			if err != nil {
+				return fmt.Errorf("AI 返回了未通过安全审查的命令: %w", err)
+			}
+
+			approved, err := executor.ConfirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
 			if err != nil {
 				return err
 			}
@@ -69,7 +74,7 @@ func newDiagCmd() *cobra.Command {
 				pterm.Info.Println("未执行任何系统命令")
 				return nil
 			}
-			return executor.RunCommands("bash", cmd.OutOrStdout(), commands)
+			return executor.RunPlan(cmd.OutOrStdout(), plan)
 		},
 	}
 
