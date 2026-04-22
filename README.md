@@ -5,8 +5,9 @@
 - 使用 [`github.com/sashabaranov/go-openai`](go.mod) 连接兼容 OpenAI Chat Completions 的模型服务。
 - 使用 [`github.com/shirou/gopsutil/v3`](go.mod) 采集 CPU、内存和 Top 5 进程信息。
 - 使用 [`github.com/pterm/pterm`](go.mod) 提供 Spinner、彩色提示和终端渲染。
-- [`ops-agent ask`](cmd/ask.go) 打印 AI 回复，并在发现 ```bash``` 代码块时要求用户确认后执行。
+- [`ops-agent ask`](cmd/ask.go) 调用兼容 OpenAI Chat Completions 的模型服务进行运维问答，并在发现 ```bash``` 代码块时要求用户确认后执行。
 - [`ops-agent diag`](cmd/diag.go) 自动采集主机指标和最近 100 行日志，请 AI 基于真实数据做诊断。
+- 统一使用带有“赛博小猫”人格的系统提示词，并在终端中展示小猫风格的 spinner、ASCII 立绘与回复气泡。
 
 ## 配置
 
@@ -33,21 +34,22 @@ provider:
 
 ## 安全执行机制
 
-- 模型若返回 `bash` 代码块，将由 [`internal/executor/executor.go`](internal/executor/executor.go) 提取。
-- 执行前会显示“警告：即将执行以下系统级命令，是否继续？(Y/N)”。
-- 只有用户明确输入 `Y` 或 `YES` 才会通过 `bash -lc` 执行命令并回显输出。
+- 模型若返回 `bash` 代码块，将由 [`ExtractCommands()`](internal/executor/executor.go:56) 提取。
+- 所有候选命令会先经过 [`ReviewCommands()`](internal/executor/executor.go:83) 的白名单与结构审查。
+- 执行前会显示带人格化语气的确认提示。
+- 只有用户明确输入 `Y` 或 `YES` 才会逐条执行已审查通过的命令并回显输出。
 
 `go-ops-agent` 是一个面向终端场景的运维辅助 CLI，目标是把本机诊断信息采集、LLM 分析与后续执行建议串起来，形成一个轻量的 AI Ops Assistant。
 
-当前仓库已经完成了基础命令行骨架、配置加载能力以及若干核心模块的数据结构定义，适合继续向“可实际诊断与回答运维问题”的方向迭代。
+当前仓库已经完成了基础命令行骨架、配置加载能力、真实的模型调用链路、系统信息采集、命令审查执行，以及带人格化终端表现的问答/诊断流程。
 
 ## 项目目标
 
 - 提供统一的命令行入口 [`ops-agent`](cmd/root.go:14)
-- 支持运维问答入口 [`ask`](cmd/ask.go:9)
-- 支持主机诊断入口 [`diag`](cmd/diag.go:9)
+- 支持运维问答入口 [`ask`](cmd/ask.go:18)
+- 支持主机诊断入口 [`diag`](cmd/diag.go:19)
 - 加载 LLM Provider 配置，便于后续接入模型服务 [`Load()`](internal/config/config.go:21)
-- 为系统信息采集、提示词生成、命令提取等模块预留清晰的结构 [`Snapshot`](internal/sysinfo/sysinfo.go:3)、[`Client`](internal/llm/client.go:5)、[`Plan`](internal/executor/executor.go:3)
+- 提供系统信息采集、提示词生成、命令提取与审查、终端展示等模块化能力 [`Snapshot`](internal/sysinfo/sysinfo.go:18)、[`Client`](internal/llm/client.go:14)、[`Plan`](internal/executor/executor.go:14)
 
 ## 当前已实现功能
 
@@ -80,40 +82,47 @@ provider:
 - `OPS_AGENT_API_KEY`
 - `OPS_AGENT_MODEL`
 
-### 3. 子命令占位实现
+### 3. 问答与诊断命令
 
-#### [`ask`](cmd/ask.go:9)
+#### [`ask`](cmd/ask.go:18)
 
 - 命令形式：`ops-agent ask [question]`
-- 已完成参数个数校验，使用 [`cobra.MinimumNArgs(1)`](cmd/ask.go:13)
-- 当前行为为输出收到的问题文本，属于功能占位实现，逻辑见 [`RunE`](cmd/ask.go:14)
+- 已完成参数个数校验，使用 [`cobra.MinimumNArgs(1)`](cmd/ask.go:22)
+- 会加载配置并创建 LLM 客户端，逻辑见 [`RunE`](cmd/ask.go:23)
+- 会通过 [`BuildAskPrompt()`](internal/prompt/templates.go:18) 组装问答提示词，并调用 [`(*Client).Chat()`](internal/llm/client.go:35)
+- 使用 [`internal/ui/cat.go`](internal/ui/cat.go) 提供小猫 spinner 与回复展示
+- 若模型返回 `bash` 代码块，会进入命令提取、审查、确认与执行链路
 
-#### [`diag`](cmd/diag.go:9)
+#### [`diag`](cmd/diag.go:19)
 
-- 命令形式：`ops-agent diag`
-- 当前行为为输出“开始采集系统信息”的提示，属于功能占位实现，逻辑见 [`RunE`](cmd/diag.go:13)
+- 命令形式：`ops-agent diag [question]`
+- 会采集 CPU、内存、Top 5 进程以及最近日志，逻辑见 [`RunE`](cmd/diag.go:23)
+- 会在高 CPU、高内存压力或存在 OOM 日志时注入“系统体感”，逻辑见 [`buildSensations()`](cmd/diag.go:86)
+- 会通过 [`BuildDiagPrompt()`](internal/prompt/templates.go:22) 组装诊断提示词并请求模型分析
+- 诊断结果同样会进入命令提取、审查、确认与执行链路
 
-### 4. LLM 与诊断相关基础结构
+### 4. LLM、Prompt 与诊断能力
 
-虽然尚未打通完整流程，但下面这些模块已经建立了后续开发所需的基础对象：
+下面这些模块已经完成并参与实际流程：
 
-- LLM 客户端结构 [`Client`](internal/llm/client.go:5)
-- LLM 客户端构造函数 [`NewClient()`](internal/llm/client.go:9)
-- 系统提示词模板 [`SystemPrompt`](internal/prompt/templates.go:3)
-- 系统快照结构 [`Snapshot`](internal/sysinfo/sysinfo.go:3)
-- 进程信息结构 [`ProcessInfo`](internal/sysinfo/sysinfo.go:10)
-- 执行计划结构 [`Plan`](internal/executor/executor.go:3)
+- LLM 客户端结构 [`Client`](internal/llm/client.go:14)
+- LLM 客户端构造函数 [`NewClient()`](internal/llm/client.go:19)
+- 真实聊天请求逻辑 [`(*Client).Chat()`](internal/llm/client.go:35)
+- 赛博小猫系统提示词 [`SystemPrompt`](internal/prompt/templates.go:5)
+- 问答、诊断、日志提示词构造函数 [`BuildAskPrompt()`](internal/prompt/templates.go:18)、[`BuildDiagPrompt()`](internal/prompt/templates.go:22)、[`BuildLogPrompt()`](internal/prompt/templates.go:33)
+- 系统快照结构 [`Snapshot`](internal/sysinfo/sysinfo.go:18)
+- 进程信息结构 [`ProcessInfo`](internal/sysinfo/sysinfo.go:26)
+- 执行计划结构 [`Plan`](internal/executor/executor.go:14)
 
-## 当前未完成 / 占位能力
+### 5. 系统信息采集与命令执行
 
-为避免 README 与实际代码不一致，下面这些能力目前**尚未真正实现或尚未打通**：
+以下能力已经具备：
 
-- [`ask`](cmd/ask.go:9) 还没有真正调用 LLM 接口
-- [`diag`](cmd/diag.go:9) 还没有真正采集 CPU、内存、进程等主机信息
-- [`Client`](internal/llm/client.go:5) 目前只有配置封装，还没有实际请求逻辑
-- [`ExtractCommands()`](internal/executor/executor.go:7) 目前返回 `nil`，尚未实现命令提取
-- [`SystemPrompt`](internal/prompt/templates.go:3) 已存在，但尚未与问答/诊断链路绑定
-- 配置加载虽然已完成，但当前命令执行流程并未真正消费完整配置能力
+- CPU、内存、Top 5 进程采集 [`CollectSnapshot()`](internal/sysinfo/sysinfo.go:33)
+- 日志读取与 OOM 过滤 [`ReadRecentLogs()`](internal/sysinfo/sysinfo.go:94)、[`FilterOOMLogs()`](internal/sysinfo/sysinfo.go:113)
+- `bash` 代码块命令提取 [`ExtractCommands()`](internal/executor/executor.go:56)
+- 命令白名单与结构安全审查 [`ReviewCommands()`](internal/executor/executor.go:83)
+- 执行前二次确认 [`ConfirmExecution()`](internal/executor/executor.go:272)
 
 ## 快速开始
 
@@ -139,28 +148,42 @@ go run . --help
 
 ### 3. 使用子命令
 
-执行问答占位命令：
+执行问答命令：
 
 ```bash
 go run . ask "磁盘使用率高怎么办"
 ```
 
-当前预期输出类似：
+当前预期输出为小猫风格的 spinner 与 AI 回复，例如：
 
 ```text
-ask stub received: 磁盘使用率高怎么办
+ /[?25l
+( o.o )
+ > ^ <   赛博运维猫在线值守喵
+
+主人，报告在这里喵：
+
+先看磁盘占用最大的目录和文件，再确认是否是日志、缓存或异常增长的业务数据。
 ```
 
-执行诊断占位命令：
+执行诊断命令：
 
 ```bash
 go run . diag
 ```
 
-当前预期输出类似：
+当前预期输出会先显示系统快照，再显示 AI 诊断结果，例如：
 
 ```text
-diag stub collecting system information...
+系统快照
+CPU负载: 92.10%
+内存: 已用 7560 MB / 总计 8192 MB / 可用 420 MB
+Top 5 进程:
+- PID=1234 Name=java CPU=88.12% RSS=2048MB
+
+主人，报告在这里喵：
+
+喵呜，当前主机已经明显过热，Java 进程正在持续吞噬 CPU，需要优先排查这个进程的线程与 GC 状态。
 ```
 
 ## 配置说明
@@ -211,19 +234,19 @@ set OPS_AGENT_MODEL=deepseek-chat
 
 ## 当前实现状态总结
 
-如果从工程成熟度来看，当前仓库处于“**第一阶段：骨架已完成，核心业务逻辑待接入**”的状态：
+如果从工程成熟度来看，当前仓库已经从“骨架阶段”进入“**基础能力可用、可继续增强体验与安全策略**”的状态：
 
-- **已完成**：命令组织、配置体系、基础模块拆分、主要数据结构定义
-- **部分完成**：子命令入口已存在，但仍为 stub
-- **未完成**：真实诊断采集、LLM 请求发送、回答生成、命令建议提取与执行链路
+- **已完成**：命令组织、配置体系、真实 LLM 请求、系统指标采集、诊断链路、命令提取与安全审查、终端人格化展示
+- **部分完成**：整体功能已可用，但文档、测试覆盖率与更多诊断规则仍有继续完善空间
+- **未完成**：更细粒度的结构化诊断输出、更丰富的 Linux 指标采集、更完善的集成测试
 
-这意味着当前仓库已经具备继续开发的清晰边界，下一步可以优先补齐以下方向：
+这意味着当前仓库已经具备继续向“更强诊断能力”和“更稳定执行体验”演进的基础，下一步可以优先考虑：
 
-1. 在 [`internal/llm/client.go`](internal/llm/client.go) 中实现真实的 API 调用
-2. 在 [`internal/sysinfo`](internal/sysinfo/sysinfo.go) 中补充系统信息采集逻辑
-3. 将 [`ask`](cmd/ask.go:9) 与提示词、模型调用打通
-4. 将 [`diag`](cmd/diag.go:9) 与系统快照、诊断提示词、分析结果打通
-5. 完成 [`ExtractCommands()`](internal/executor/executor.go:7) 的解析逻辑
+1. 扩展 [`internal/sysinfo/sysinfo.go`](internal/sysinfo/sysinfo.go) 采集磁盘、负载、网络等更多系统指标
+2. 为 [`cmd/diag.go`](cmd/diag.go) 增加更细粒度的异常识别与结构化输出
+3. 为 [`internal/executor/executor.go`](internal/executor/executor.go) 增加更多命令白名单规则和测试覆盖
+4. 完善 [`README.md`](README.md) 的截图、示例输出与配置说明
+5. 增加集成测试与模拟 LLM Provider 的测试场景
 
 ## 适合作为下一步迭代的方向
 
@@ -235,4 +258,4 @@ set OPS_AGENT_MODEL=deepseek-chat
 
 ---
 
-当前 README 已按“先对外介绍，再补充当前实现状态”的方式整理，并严格区分了**已实现能力**与**占位/未完成能力**，确保文档与现有代码保持一致。
+当前 README 已根据现有实现重新整理，重点反映真实可用能力，并把后续工作聚焦到增强项而非历史占位项。
