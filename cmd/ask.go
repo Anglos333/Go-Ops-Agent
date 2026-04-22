@@ -6,13 +6,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 
 	"go-ops-agent/internal/config"
 	"go-ops-agent/internal/executor"
 	"go-ops-agent/internal/llm"
 	"go-ops-agent/internal/prompt"
+	"go-ops-agent/internal/ui"
 )
 
 func newAskCmd() *cobra.Command {
@@ -31,15 +31,15 @@ func newAskCmd() *cobra.Command {
 				return err
 			}
 
-			spinner, _ := pterm.DefaultSpinner.Start("AI 正在分析问题")
+			spinner, _ := ui.StartCatSpinner("本喵正在分析主人的问题")
 			resp, err := client.Chat(context.Background(), prompt.BuildAskPrompt(strings.Join(args, " ")))
 			if err != nil {
 				spinner.Fail("AI 请求失败")
 				return err
 			}
-			spinner.Success("AI 已返回结果")
+			spinner.Success("小猫助手已经叼回结果")
 
-			pterm.DefaultBox.WithTitle("AI 回复").Println(resp)
+			ui.PrintCatReply("小猫回复", resp)
 
 			commands := executor.ExtractCommands(resp)
 			plan, err := executor.ReviewCommands(commands)
@@ -52,11 +52,11 @@ func newAskCmd() *cobra.Command {
 				return err
 			}
 			if !approved {
-				pterm.Info.Println("未执行任何系统命令")
+				ui.PrintCatReply("小猫提醒", "本喵把危险爪印收回去了，没有执行任何系统命令喵。")
 				return nil
 			}
 
-			pterm.Success.Println("开始执行 AI 建议的命令")
+			ui.PrintCatReply("小猫行动", "本喵要开始挥爪执行已经审查通过的命令了喵。")
 			return executor.RunPlan(os.Stdout, plan)
 		},
 	}

@@ -13,6 +13,7 @@ import (
 	"go-ops-agent/internal/llm"
 	"go-ops-agent/internal/prompt"
 	"go-ops-agent/internal/sysinfo"
+	"go-ops-agent/internal/ui"
 )
 
 func newDiagCmd() *cobra.Command {
@@ -29,7 +30,7 @@ func newDiagCmd() *cobra.Command {
 				return err
 			}
 
-			spinner, _ := pterm.DefaultSpinner.Start("正在采集系统指标与日志")
+			spinner, _ := ui.StartCatSpinner("正在竖起耳朵采集系统指标与日志")
 			snapshot, err := sysinfo.CollectSnapshot()
 			if err != nil {
 				spinner.Fail("系统指标采集失败")
@@ -49,16 +50,17 @@ func newDiagCmd() *cobra.Command {
 				}
 			}
 
-			resp, err := client.Chat(context.Background(), prompt.BuildDiagPrompt(snapshot.Summary(), logPayload, question))
+			sensations := buildSensations(snapshot, logPayload)
+			resp, err := client.Chat(context.Background(), prompt.BuildDiagPrompt(snapshot.Summary(), logPayload, question, sensations))
 			if err != nil {
 				spinner.Fail("AI 诊断失败")
 				return err
 			}
-			spinner.Success("诊断完成")
+			spinner.Success("小猫已经完成诊断巡视")
 
 			pterm.DefaultSection.Println("系统快照")
 			fmt.Fprintln(cmd.OutOrStdout(), snapshot.Summary())
-			pterm.DefaultBox.WithTitle("AI 诊断").Println(resp)
+			ui.PrintCatReply("小猫诊断", resp)
 
 			commands := executor.ExtractCommands(resp)
 			plan, err := executor.ReviewCommands(commands)
@@ -71,7 +73,7 @@ func newDiagCmd() *cobra.Command {
 				return err
 			}
 			if !approved {
-				pterm.Info.Println("未执行任何系统命令")
+				ui.PrintCatReply("小猫提醒", "本喵没有继续挥爪，系统命令一条都没执行喵。")
 				return nil
 			}
 			return executor.RunPlan(cmd.OutOrStdout(), plan)
@@ -79,4 +81,21 @@ func newDiagCmd() *cobra.Command {
 	}
 
 	return cmd
+}
+
+func buildSensations(snapshot sysinfo.Snapshot, logs string) []string {
+	sensations := make([]string, 0, 3)
+	if snapshot.CPUUsagePercent >= 90 {
+		sensations = append(sensations, "系统提示：当前 CPU 温度极高，你的爪子都被烫到了。")
+	}
+	if snapshot.MemoryTotalMB > 0 {
+		usedRatio := float64(snapshot.MemoryUsedMB) / float64(snapshot.MemoryTotalMB)
+		if usedRatio >= 0.9 {
+			sensations = append(sensations, "系统提示：内存快被挤满了，你的猫窝越来越窄，已经有点炸毛。")
+		}
+	}
+	if strings.TrimSpace(sysinfo.FilterOOMLogs(logs)) != "" {
+		sensations = append(sensations, "系统提示：内存见底了，你感觉非常饥饿。")
+	}
+	return sensations
 }

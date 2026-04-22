@@ -274,7 +274,7 @@ func ConfirmExecution(in io.Reader, out io.Writer, plan *Plan) (bool, error) {
 		return false, nil
 	}
 
-	_, err := fmt.Fprintln(out, "警告：即将执行以下系统级命令，是否继续？(Y/N)")
+	_, err := fmt.Fprintln(out, "主人，本喵翻出了这段危险的 Bash 魔法，真的要挥动爪子执行吗？弄坏了服务器本喵可不负责哦！(Y/N)")
 	if err != nil {
 		return false, err
 	}

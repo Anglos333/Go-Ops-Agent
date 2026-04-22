@@ -73,4 +73,7 @@ func TestConfirmExecutionUsesReviewedArgv(t *testing.T) {
 	if !strings.Contains(out.String(), "ls -l") {
 		t.Fatalf("expected reviewed argv in output, got %q", out.String())
 	}
+	if !strings.Contains(out.String(), "危险的 Bash 魔法") {
+		t.Fatalf("expected cat-styled confirmation message, got %q", out.String())
+	}
 }
