@@ -44,6 +44,17 @@ func newAskCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("AI 返回了未通过安全审查的命令: %w", err)
 			}
+			if len(plan.Rejected) > 0 {
+				reasons := make([]string, 0, len(plan.Rejected))
+				for _, rejected := range plan.Rejected {
+					reasons = append(reasons, fmt.Sprintf("- %s", rejected.Source))
+				}
+				ui.PrintCatReply("小猫安检", fmt.Sprintf("本喵刚刚拦下了 %d 条不安全命令，已经自动没收，不会触发冷冰冰的系统报错喵：\n%s", len(plan.Rejected), strings.Join(reasons, "\n")))
+			}
+			if len(plan.Commands) == 0 {
+				ui.PrintCatReply("小猫提醒", "这次候选命令已经被本喵全部拦下，没有留下任何可执行命令喵。")
+				return nil
+			}
 
 			approved, err := confirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
 			if err != nil {

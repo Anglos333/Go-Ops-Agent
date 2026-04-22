@@ -31,30 +31,58 @@ func TestReviewCommandsAllowsSimpleCommands(t *testing.T) {
 }
 
 func TestReviewCommandsRejectsPipeline(t *testing.T) {
-	_, err := ReviewCommands([]string{"ps aux | grep nginx"})
-	if err == nil || !strings.Contains(err.Error(), "pipelines") {
-		t.Fatalf("expected pipeline rejection, got %v", err)
+	plan, err := ReviewCommands([]string{"ps aux | grep nginx"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.Rejected) != 1 || !strings.Contains(plan.Rejected[0].Reason, "pipelines") {
+		t.Fatalf("expected pipeline rejection, got %#v", plan.Rejected)
 	}
 }
 
 func TestReviewCommandsRejectsCommandSubstitution(t *testing.T) {
-	_, err := ReviewCommands([]string{"ls $(pwd)"})
-	if err == nil || !strings.Contains(err.Error(), "substitution") {
-		t.Fatalf("expected substitution rejection, got %v", err)
+	plan, err := ReviewCommands([]string{"ls $(pwd)"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.Rejected) != 1 || !strings.Contains(plan.Rejected[0].Reason, "substitution") {
+		t.Fatalf("expected substitution rejection, got %#v", plan.Rejected)
 	}
 }
 
 func TestReviewCommandsRejectsNonAllowlistedCommand(t *testing.T) {
-	_, err := ReviewCommands([]string{"rm -rf /tmp/demo"})
-	if err == nil || !strings.Contains(err.Error(), "allowlist") {
-		t.Fatalf("expected allowlist rejection, got %v", err)
+	plan, err := ReviewCommands([]string{"rm -rf /tmp/demo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.Rejected) != 1 || !strings.Contains(plan.Rejected[0].Reason, "allowlist") {
+		t.Fatalf("expected allowlist rejection, got %#v", plan.Rejected)
 	}
 }
 
 func TestReviewCommandsRestrictsFindActions(t *testing.T) {
-	_, err := ReviewCommands([]string{"find /tmp -name *.log -exec rm {} ;"})
-	if err == nil {
-		t.Fatal("expected find action rejection")
+	plan, err := ReviewCommands([]string{"find /tmp -name *.log -exec rm {} ;"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.Rejected) != 1 {
+		t.Fatalf("expected 1 rejected command, got %#v", plan.Rejected)
+	}
+	if len(plan.Commands) != 0 {
+		t.Fatalf("expected no approved commands, got %#v", plan.Commands)
+	}
+}
+
+func TestReviewCommandsKeepsSafeCommandsWhenOneIsRejected(t *testing.T) {
+	plan, err := ReviewCommands([]string{"ls -l\nfind /tmp -name *.log -exec rm {} ;\nps aux"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.Commands) != 2 {
+		t.Fatalf("expected 2 approved commands, got %#v", plan.Commands)
+	}
+	if len(plan.Rejected) != 1 {
+		t.Fatalf("expected 1 rejected command, got %#v", plan.Rejected)
 	}
 }
 

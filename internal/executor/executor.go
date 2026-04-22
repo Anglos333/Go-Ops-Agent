@@ -13,12 +13,23 @@ import (
 
 type Plan struct {
 	Commands []CommandPlan
+	Rejected []RejectedCommand
 	Risk     RiskLevel
 }
 
 type CommandPlan struct {
 	Source string
 	Argv   []string
+}
+
+type RejectedCommand struct {
+	Source string
+	Reason string
+}
+
+type ReviewResult struct {
+	Approved []CommandPlan
+	Rejected []RejectedCommand
 }
 
 type RiskLevel string
@@ -94,13 +105,14 @@ func ReviewCommands(commands []string) (*Plan, error) {
 }
 
 func ReviewCommandsWithOptions(commands []string, opts ReviewOptions) (*Plan, error) {
-	plan := &Plan{Commands: make([]CommandPlan, 0, len(commands))}
+	plan := &Plan{Commands: make([]CommandPlan, 0, len(commands)), Rejected: make([]RejectedCommand, 0)}
 	for _, command := range commands {
-		parsed, err := reviewCommand(command, opts)
+		result, err := reviewCommand(command, opts)
 		if err != nil {
 			return nil, err
 		}
-		plan.Commands = append(plan.Commands, parsed...)
+		plan.Commands = append(plan.Commands, result.Approved...)
+		plan.Rejected = append(plan.Rejected, result.Rejected...)
 	}
 	plan.Risk = classifyRisk(plan)
 	return plan, nil
@@ -149,41 +161,66 @@ func classifyRisk(plan *Plan) RiskLevel {
 	return risk
 }
 
-func reviewCommand(command string, opts ReviewOptions) ([]CommandPlan, error) {
+func reviewCommand(command string, opts ReviewOptions) (*ReviewResult, error) {
 	file, err := parser.Parse(strings.NewReader(command), "")
 	if err != nil {
 		return nil, &ReviewError{Command: command, Reason: fmt.Sprintf("shell parse failed: %v", err)}
 	}
 
-	plans := make([]CommandPlan, 0, len(file.Stmts))
+	result := &ReviewResult{
+		Approved: make([]CommandPlan, 0, len(file.Stmts)),
+		Rejected: make([]RejectedCommand, 0),
+	}
 	for _, stmt := range file.Stmts {
-		if err := rejectStatementStructure(command, stmt); err != nil {
-			return nil, err
+		statementSource, sourceErr := statementText(stmt)
+		if sourceErr != nil {
+			return nil, &ReviewError{Command: command, Reason: fmt.Sprintf("render statement failed: %v", sourceErr)}
+		}
+		if statementSource == "" {
+			statementSource = command
+		}
+
+		if err := rejectStatementStructure(statementSource, stmt); err != nil {
+			result.Rejected = append(result.Rejected, RejectedCommand{Source: statementSource, Reason: err.Error()})
+			continue
 		}
 
 		call, ok := stmt.Cmd.(*syntax.CallExpr)
 		if !ok {
-			return nil, &ReviewError{Command: command, Reason: "only simple command invocations are allowed"}
+			result.Rejected = append(result.Rejected, RejectedCommand{Source: statementSource, Reason: (&ReviewError{Command: statementSource, Reason: "only simple command invocations are allowed"}).Error()})
+			continue
 		}
 
 		argv, err := literalArgs(call)
 		if err != nil {
-			return nil, &ReviewError{Command: command, Reason: err.Error()}
+			result.Rejected = append(result.Rejected, RejectedCommand{Source: statementSource, Reason: (&ReviewError{Command: statementSource, Reason: err.Error()}).Error()})
+			continue
 		}
 		if len(argv) == 0 {
-			return nil, &ReviewError{Command: command, Reason: "empty command is not allowed"}
+			result.Rejected = append(result.Rejected, RejectedCommand{Source: statementSource, Reason: (&ReviewError{Command: statementSource, Reason: "empty command is not allowed"}).Error()})
+			continue
 		}
 
-		if err := enforceCommandPolicy(command, argv, opts); err != nil {
-			return nil, err
+		if err := enforceCommandPolicy(statementSource, argv, opts); err != nil {
+			result.Rejected = append(result.Rejected, RejectedCommand{Source: statementSource, Reason: err.Error()})
+			continue
 		}
 
-		plans = append(plans, CommandPlan{Source: command, Argv: argv})
+		result.Approved = append(result.Approved, CommandPlan{Source: statementSource, Argv: argv})
 	}
-	if len(plans) == 0 {
+	if len(result.Approved) == 0 && len(result.Rejected) == 0 {
 		return nil, &ReviewError{Command: command, Reason: "no executable command found"}
 	}
-	return plans, nil
+	return result, nil
+}
+
+func statementText(stmt *syntax.Stmt) (string, error) {
+	var buf bytes.Buffer
+	printer := syntax.NewPrinter()
+	if err := printer.Print(&buf, stmt); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(strings.ReplaceAll(buf.String(), "\\\n", "")), nil
 }
 
 func rejectStatementStructure(command string, stmt *syntax.Stmt) error {

@@ -94,3 +94,63 @@ func TestDiagCommandIntegration(t *testing.T) {
 		}
 	}
 }
+
+func TestAskCommandIntegrationGracefullyHandlesRejectedCommands(t *testing.T) {
+	resetCommandDeps()
+	t.Cleanup(resetCommandDeps)
+
+	fakeClient := &fakeChatClient{resp: "[一句话结论]\n喵\n\n[必要命令]\n```bash\nfind . -type f -size +100M -exec du -h {} \\;\nls -lh\n```"}
+	loadConfig = func(string) (*config.Config, error) {
+		return &config.Config{Provider: config.ProviderConfig{APIKey: "test", Model: "fake"}}, nil
+	}
+	newChatClient = func(config.ProviderConfig) (chatClient, error) { return fakeClient, nil }
+	confirmExecution = func(_ io.Reader, _ io.Writer, plan *executor.Plan) (bool, error) {
+		if len(plan.Commands) != 1 || strings.Join(plan.Commands[0].Argv, " ") != "ls -lh" {
+			t.Fatalf("unexpected approved plan: %#v", plan)
+		}
+		if len(plan.Rejected) != 1 {
+			t.Fatalf("expected rejected command, got %#v", plan.Rejected)
+		}
+		return false, nil
+	}
+
+	cmd := newAskCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"找出大文件"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDiagCommandIntegrationReturnsNilWhenAllCommandsRejected(t *testing.T) {
+	resetCommandDeps()
+	t.Cleanup(resetCommandDeps)
+
+	fakeClient := &fakeChatClient{resp: "[一句话结论]\n喵呜\n\n[必要命令]\n```bash\nfind . -type f -size +100M -exec du -h {} \\;\n```"}
+	loadConfig = func(string) (*config.Config, error) {
+		return &config.Config{Provider: config.ProviderConfig{APIKey: "test", Model: "fake"}}, nil
+	}
+	newChatClient = func(config.ProviderConfig) (chatClient, error) { return fakeClient, nil }
+	collectSnapshot = func() (sysinfo.Snapshot, error) {
+		return sysinfo.Snapshot{}, nil
+	}
+	readRecentLogs = func(int) (string, error) {
+		return "", nil
+	}
+	confirmExecution = func(_ io.Reader, _ io.Writer, plan *executor.Plan) (bool, error) {
+		t.Fatalf("confirmExecution should not be called when all commands are rejected: %#v", plan)
+		return false, nil
+	}
+
+	cmd := newDiagCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

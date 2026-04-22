@@ -65,6 +65,17 @@ func newDiagCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("AI 返回了未通过安全审查的命令: %w", err)
 			}
+			if len(plan.Rejected) > 0 {
+				reasons := make([]string, 0, len(plan.Rejected))
+				for _, rejected := range plan.Rejected {
+					reasons = append(reasons, fmt.Sprintf("- %s", rejected.Source))
+				}
+				ui.PrintCatReply("小猫安检", fmt.Sprintf("本喵刚刚从诊断建议里删掉了 %d 条违规命令，只保留安全部分继续给主人确认喵：\n%s", len(plan.Rejected), strings.Join(reasons, "\n")))
+			}
+			if len(plan.Commands) == 0 {
+				ui.PrintCatReply("小猫提醒", "诊断建议里的候选命令都被本喵拦住了，这次不会执行任何系统命令喵。")
+				return nil
+			}
 
 			approved, err := confirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
 			if err != nil {
