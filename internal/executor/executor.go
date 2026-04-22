@@ -13,12 +13,21 @@ import (
 
 type Plan struct {
 	Commands []CommandPlan
+	Risk     RiskLevel
 }
 
 type CommandPlan struct {
 	Source string
 	Argv   []string
 }
+
+type RiskLevel string
+
+const (
+	RiskLow    RiskLevel = "LOW"
+	RiskMedium RiskLevel = "MEDIUM"
+	RiskHigh   RiskLevel = "HIGH"
+)
 
 type ReviewOptions struct {
 	AllowedCommands map[string]CommandRule
@@ -93,7 +102,51 @@ func ReviewCommandsWithOptions(commands []string, opts ReviewOptions) (*Plan, er
 		}
 		plan.Commands = append(plan.Commands, parsed...)
 	}
+	plan.Risk = classifyRisk(plan)
 	return plan, nil
+}
+
+func classifyRisk(plan *Plan) RiskLevel {
+	if plan == nil || len(plan.Commands) == 0 {
+		return RiskLow
+	}
+	risk := RiskLow
+	if len(plan.Commands) >= 3 {
+		risk = RiskMedium
+	}
+	for _, command := range plan.Commands {
+		if len(command.Argv) == 0 {
+			continue
+		}
+		switch command.Argv[0] {
+		case "find":
+			if risk == RiskLow {
+				risk = RiskMedium
+			}
+			for _, arg := range command.Argv[1:] {
+				if arg == "/" || arg == "/etc" || arg == "/var" {
+					return RiskHigh
+				}
+			}
+		case "du":
+			for _, arg := range command.Argv[1:] {
+				if arg == "/" || arg == "/var" || arg == "/home" {
+					if risk != RiskHigh {
+						risk = RiskMedium
+					}
+				}
+			}
+		case "cat", "grep":
+			for _, arg := range command.Argv[1:] {
+				if strings.Contains(arg, "/etc/") {
+					if risk != RiskHigh {
+						risk = RiskMedium
+					}
+				}
+			}
+		}
+	}
+	return risk
 }
 
 func reviewCommand(command string, opts ReviewOptions) ([]CommandPlan, error) {
@@ -273,9 +326,15 @@ func ConfirmExecution(in io.Reader, out io.Writer, plan *Plan) (bool, error) {
 	if plan == nil || len(plan.Commands) == 0 {
 		return false, nil
 	}
+	if plan.Risk == "" {
+		plan.Risk = classifyRisk(plan)
+	}
 
 	_, err := fmt.Fprintln(out, "主人，本喵翻出了这段危险的 Bash 魔法，真的要挥动爪子执行吗？弄坏了服务器本喵可不负责哦！(Y/N)")
 	if err != nil {
+		return false, err
+	}
+	if _, err := fmt.Fprintf(out, "风险等级: %s\n", plan.Risk); err != nil {
 		return false, err
 	}
 	for _, cmd := range plan.Commands {
@@ -290,7 +349,22 @@ func ConfirmExecution(in io.Reader, out io.Writer, plan *Plan) (bool, error) {
 		return false, err
 	}
 	answer = strings.TrimSpace(strings.ToUpper(answer))
-	return answer == "Y" || answer == "YES", nil
+	approved := answer == "Y" || answer == "YES"
+	if !approved {
+		return false, nil
+	}
+	if plan.Risk == RiskLow {
+		return true, nil
+	}
+	if _, err := fmt.Fprintf(out, "检测到 %s 风险操作，请输入 EXECUTE 进行二次确认：\n", plan.Risk); err != nil {
+		return false, err
+	}
+	second, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	second = strings.TrimSpace(strings.ToUpper(second))
+	return second == "EXECUTE", nil
 }
 
 func RunPlan(out io.Writer, plan *Plan) error {

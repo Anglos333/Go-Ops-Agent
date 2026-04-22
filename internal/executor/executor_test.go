@@ -76,4 +76,48 @@ func TestConfirmExecutionUsesReviewedArgv(t *testing.T) {
 	if !strings.Contains(out.String(), "危险的 Bash 魔法") {
 		t.Fatalf("expected cat-styled confirmation message, got %q", out.String())
 	}
+	if !strings.Contains(out.String(), "风险等级: LOW") {
+		t.Fatalf("expected low risk level, got %q", out.String())
+	}
+}
+
+func TestConfirmExecutionRequiresSecondConfirmationForMediumRisk(t *testing.T) {
+	plan := &Plan{Commands: []CommandPlan{{Argv: []string{"find", "/tmp", "-name", "*.log"}}, {Argv: []string{"ls", "-l"}}, {Argv: []string{"ps", "aux"}}}, Risk: RiskMedium}
+	input := strings.NewReader("Y\nEXECUTE\n")
+	var out bytes.Buffer
+
+	approved, err := ConfirmExecution(input, &out, plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !approved {
+		t.Fatal("expected approval after second confirmation")
+	}
+	if !strings.Contains(out.String(), "二次确认") {
+		t.Fatalf("expected second confirmation prompt, got %q", out.String())
+	}
+}
+
+func TestConfirmExecutionRejectsWhenSecondConfirmationMissing(t *testing.T) {
+	plan := &Plan{Commands: []CommandPlan{{Argv: []string{"find", "/", "-name", "*.log"}}}, Risk: RiskHigh}
+	input := strings.NewReader("Y\nNOPE\n")
+	var out bytes.Buffer
+
+	approved, err := ConfirmExecution(input, &out, plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if approved {
+		t.Fatal("expected rejection when second confirmation mismatches")
+	}
+}
+
+func TestReviewCommandsAssignsHighRisk(t *testing.T) {
+	plan, err := ReviewCommands([]string{"find / -name *.log"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if plan.Risk != RiskHigh {
+		t.Fatalf("expected high risk, got %s", plan.Risk)
+	}
 }

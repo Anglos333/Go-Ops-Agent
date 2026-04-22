@@ -13,6 +13,9 @@ func TestBuildDiagPromptIncludesSensations(t *testing.T) {
 	if !strings.Contains(result, "爪子都被烫到了") {
 		t.Fatalf("expected sensation content, got %q", result)
 	}
+	if !strings.Contains(result, "[一句话结论]") {
+		t.Fatalf("expected structured diagnosis output instruction, got %q", result)
+	}
 }
 
 func TestBuildAskPromptIncludesRoleInstruction(t *testing.T) {

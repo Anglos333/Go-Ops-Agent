@@ -8,9 +8,7 @@ import (
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 
-	"go-ops-agent/internal/config"
 	"go-ops-agent/internal/executor"
-	"go-ops-agent/internal/llm"
 	"go-ops-agent/internal/prompt"
 	"go-ops-agent/internal/sysinfo"
 	"go-ops-agent/internal/ui"
@@ -21,22 +19,22 @@ func newDiagCmd() *cobra.Command {
 		Use:   "diag [question]",
 		Short: "Collect host diagnostics and request AI analysis",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(cfgFile)
+			cfg, err := loadConfig(cfgFile)
 			if err != nil {
 				return err
 			}
-			client, err := llm.NewClient(cfg.Provider)
+			client, err := newChatClient(cfg.Provider)
 			if err != nil {
 				return err
 			}
 
 			spinner, _ := ui.StartCatSpinner("正在竖起耳朵采集系统指标与日志")
-			snapshot, err := sysinfo.CollectSnapshot()
+			snapshot, err := collectSnapshot()
 			if err != nil {
 				spinner.Fail("系统指标采集失败")
 				return err
 			}
-			logs, err := sysinfo.ReadRecentLogs(100)
+			logs, err := readRecentLogs(100)
 			if err != nil {
 				spinner.Fail("日志采集失败")
 				return err
@@ -68,7 +66,7 @@ func newDiagCmd() *cobra.Command {
 				return fmt.Errorf("AI 返回了未通过安全审查的命令: %w", err)
 			}
 
-			approved, err := executor.ConfirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
+			approved, err := confirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
 			if err != nil {
 				return err
 			}
@@ -76,7 +74,7 @@ func newDiagCmd() *cobra.Command {
 				ui.PrintCatReply("小猫提醒", "本喵没有继续挥爪，系统命令一条都没执行喵。")
 				return nil
 			}
-			return executor.RunPlan(cmd.OutOrStdout(), plan)
+			return executePlan(cmd.OutOrStdout(), plan)
 		},
 	}
 

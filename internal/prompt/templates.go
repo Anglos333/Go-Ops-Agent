@@ -27,10 +27,10 @@ func BuildDiagPrompt(snapshotSummary string, logSummary string, question string,
 		base += fmt.Sprintf("\n\n[系统体感]\n%s", formatSensations(sensations))
 	}
 	if question == "" {
-		return base + "\n\n请输出精简诊断结论、风险判断、建议排查步骤，以及必要的安全 Shell 命令。"
+		return base + "\n\n请按以下结构输出：\n[一句话结论]\n...\n\n[风险判断]\n...\n\n[排查建议]\n- ...\n\n[必要命令]\n```bash\n...\n```\n如果当前不需要命令，就在 [必要命令] 中写“暂无”。"
 	}
 
-	return base + fmt.Sprintf("\n\n[用户问题]\n%s\n\n请结合问题输出精简诊断结论、风险判断、建议排查步骤，以及必要的安全 Shell 命令。", question)
+	return base + fmt.Sprintf("\n\n[用户问题]\n%s\n\n请按以下结构输出：\n[一句话结论]\n...\n\n[风险判断]\n...\n\n[排查建议]\n- ...\n\n[必要命令]\n```bash\n...\n```\n如果当前不需要命令，就在 [必要命令] 中写“暂无”。", question)
 }
 
 func BuildLogPrompt(question string, logs string) string {

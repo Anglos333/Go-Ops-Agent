@@ -8,9 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go-ops-agent/internal/config"
 	"go-ops-agent/internal/executor"
-	"go-ops-agent/internal/llm"
 	"go-ops-agent/internal/prompt"
 	"go-ops-agent/internal/ui"
 )
@@ -21,12 +19,12 @@ func newAskCmd() *cobra.Command {
 		Short: "Ask the AI assistant an operations question",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(cfgFile)
+			cfg, err := loadConfig(cfgFile)
 			if err != nil {
 				return err
 			}
 
-			client, err := llm.NewClient(cfg.Provider)
+			client, err := newChatClient(cfg.Provider)
 			if err != nil {
 				return err
 			}
@@ -47,7 +45,7 @@ func newAskCmd() *cobra.Command {
 				return fmt.Errorf("AI 返回了未通过安全审查的命令: %w", err)
 			}
 
-			approved, err := executor.ConfirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
+			approved, err := confirmExecution(cmd.InOrStdin(), cmd.OutOrStdout(), plan)
 			if err != nil {
 				return err
 			}
@@ -57,7 +55,7 @@ func newAskCmd() *cobra.Command {
 			}
 
 			ui.PrintCatReply("小猫行动", "本喵要开始挥爪执行已经审查通过的命令了喵。")
-			return executor.RunPlan(os.Stdout, plan)
+			return executePlan(os.Stdout, plan)
 		},
 	}
 

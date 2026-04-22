@@ -3,10 +3,10 @@
 一个 Linux 优先的终端运维助手。当前版本支持：
 
 - 使用 [`github.com/sashabaranov/go-openai`](go.mod) 连接兼容 OpenAI Chat Completions 的模型服务。
-- 使用 [`github.com/shirou/gopsutil/v3`](go.mod) 采集 CPU、内存和 Top 5 进程信息。
+- 使用 [`github.com/shirou/gopsutil/v3`](go.mod) 采集 CPU、负载、内存、磁盘、网络和 Top 5 进程信息。
 - 使用 [`github.com/pterm/pterm`](go.mod) 提供 Spinner、彩色提示和终端渲染。
 - [`ops-agent ask`](cmd/ask.go) 调用兼容 OpenAI Chat Completions 的模型服务进行运维问答，并在发现 ```bash``` 代码块时要求用户确认后执行。
-- [`ops-agent diag`](cmd/diag.go) 自动采集主机指标和最近 100 行日志，请 AI 基于真实数据做诊断。
+- [`ops-agent diag`](cmd/diag.go) 自动采集主机指标和最近 100 行日志，请 AI 基于真实数据做诊断，并按结构化模板输出结论。
 - 统一使用带有“赛博小猫”人格的系统提示词，并在终端中展示小猫风格的 spinner、ASCII 立绘与回复气泡。
 
 ## 配置
@@ -36,8 +36,9 @@ provider:
 
 - 模型若返回 `bash` 代码块，将由 [`ExtractCommands()`](internal/executor/executor.go:56) 提取。
 - 所有候选命令会先经过 [`ReviewCommands()`](internal/executor/executor.go:83) 的白名单与结构审查。
-- 执行前会显示带人格化语气的确认提示。
-- 只有用户明确输入 `Y` 或 `YES` 才会逐条执行已审查通过的命令并回显输出。
+- 执行前会显示带人格化语气的确认提示，并展示风险等级。
+- 当风险等级为 `MEDIUM` 或 `HIGH` 时，除首次输入 `Y` / `YES` 外，还必须输入 `EXECUTE` 进行二次确认。
+- 只有通过二次确认的命令才会逐条执行并回显输出。
 
 `go-ops-agent` 是一个面向终端场景的运维辅助 CLI，目标是把本机诊断信息采集、LLM 分析与后续执行建议串起来，形成一个轻量的 AI Ops Assistant。
 
@@ -62,6 +63,7 @@ provider:
 - 根命令定义位于 [`rootCmd`](cmd/root.go:14)
 - 已注册两个子命令：[`newAskCmd()`](cmd/ask.go:9) 和 [`newDiagCmd()`](cmd/diag.go:9)
 - 支持全局参数 `--config` 用于指定配置文件路径，定义见 [`init()`](cmd/root.go:24)
+- 命令层已支持依赖注入测试入口，见 [`cmd/deps.go`](cmd/deps.go)
 
 ### 2. 配置加载
 
@@ -91,15 +93,16 @@ provider:
 - 会加载配置并创建 LLM 客户端，逻辑见 [`RunE`](cmd/ask.go:23)
 - 会通过 [`BuildAskPrompt()`](internal/prompt/templates.go:18) 组装问答提示词，并调用 [`(*Client).Chat()`](internal/llm/client.go:35)
 - 使用 [`internal/ui/cat.go`](internal/ui/cat.go) 提供小猫 spinner 与回复展示
-- 若模型返回 `bash` 代码块，会进入命令提取、审查、确认与执行链路
+- 若模型返回 `bash` 代码块，会进入命令提取、审查、风险分级、确认与执行链路
 
 #### [`diag`](cmd/diag.go:19)
 
 - 命令形式：`ops-agent diag [question]`
 - 会采集 CPU、内存、Top 5 进程以及最近日志，逻辑见 [`RunE`](cmd/diag.go:23)
+- 采集结果已扩展到 CPU 利用率、load1/load5/load15、内存、根分区磁盘容量、主机主 IP、网络累计收发以及 Top 5 进程，底层逻辑见 [`CollectSnapshot()`](internal/sysinfo/sysinfo.go:40)
 - 会在高 CPU、高内存压力或存在 OOM 日志时注入“系统体感”，逻辑见 [`buildSensations()`](cmd/diag.go:86)
-- 会通过 [`BuildDiagPrompt()`](internal/prompt/templates.go:22) 组装诊断提示词并请求模型分析
-- 诊断结果同样会进入命令提取、审查、确认与执行链路
+- 会通过 [`BuildDiagPrompt()`](internal/prompt/templates.go:24) 组装诊断提示词并请求模型分析，明确要求模型输出 `[一句话结论]`、`[风险判断]`、`[排查建议]`、`[必要命令]` 四段结构
+- 诊断结果同样会进入命令提取、审查、风险分级、确认与执行链路
 
 ### 4. LLM、Prompt 与诊断能力
 
@@ -109,7 +112,7 @@ provider:
 - LLM 客户端构造函数 [`NewClient()`](internal/llm/client.go:19)
 - 真实聊天请求逻辑 [`(*Client).Chat()`](internal/llm/client.go:35)
 - 赛博小猫系统提示词 [`SystemPrompt`](internal/prompt/templates.go:5)
-- 问答、诊断、日志提示词构造函数 [`BuildAskPrompt()`](internal/prompt/templates.go:18)、[`BuildDiagPrompt()`](internal/prompt/templates.go:22)、[`BuildLogPrompt()`](internal/prompt/templates.go:33)
+- 问答、诊断、日志提示词构造函数 [`BuildAskPrompt()`](internal/prompt/templates.go:20)、[`BuildDiagPrompt()`](internal/prompt/templates.go:24)、[`BuildLogPrompt()`](internal/prompt/templates.go:36)
 - 系统快照结构 [`Snapshot`](internal/sysinfo/sysinfo.go:18)
 - 进程信息结构 [`ProcessInfo`](internal/sysinfo/sysinfo.go:26)
 - 执行计划结构 [`Plan`](internal/executor/executor.go:14)
@@ -118,11 +121,22 @@ provider:
 
 以下能力已经具备：
 
-- CPU、内存、Top 5 进程采集 [`CollectSnapshot()`](internal/sysinfo/sysinfo.go:33)
+- CPU、系统负载、内存、磁盘、网络、主 IP、Top 5 进程采集 [`CollectSnapshot()`](internal/sysinfo/sysinfo.go:40)
 - 日志读取与 OOM 过滤 [`ReadRecentLogs()`](internal/sysinfo/sysinfo.go:94)、[`FilterOOMLogs()`](internal/sysinfo/sysinfo.go:113)
 - `bash` 代码块命令提取 [`ExtractCommands()`](internal/executor/executor.go:56)
 - 命令白名单与结构安全审查 [`ReviewCommands()`](internal/executor/executor.go:83)
-- 执行前二次确认 [`ConfirmExecution()`](internal/executor/executor.go:272)
+- 执行风险分级 [`classifyRisk()`](internal/executor/executor.go:106)
+- 执行前二次确认 [`ConfirmExecution()`](internal/executor/executor.go:317)
+- 诊断结构化输出约束 [`BuildDiagPrompt()`](internal/prompt/templates.go:24)
+
+### 6. 测试覆盖
+
+当前测试体系包含单元测试与集成测试：
+
+- Prompt 构造测试 [`internal/prompt/templates_test.go`](internal/prompt/templates_test.go)
+- 系统摘要与指标输出测试 [`internal/sysinfo/sysinfo_test.go`](internal/sysinfo/sysinfo_test.go)
+- 命令提取、白名单审查、风险分级、二次确认测试 [`internal/executor/executor_test.go`](internal/executor/executor_test.go)
+- CLI + LLM 主流程集成测试（通过 mock 依赖验证 [`ask`](cmd/ask.go:18) / [`diag`](cmd/diag.go:19)）[`cmd/integration_test.go`](cmd/integration_test.go)
 
 ## 快速开始
 
@@ -177,13 +191,30 @@ go run . diag
 ```text
 系统快照
 CPU负载: 92.10%
+系统负载: load1=4.20 load5=3.10 load15=2.40
 内存: 已用 7560 MB / 总计 8192 MB / 可用 420 MB
+磁盘(/): 已用 88 GB / 总计 100 GB / 可用 12 GB
+主机地址: 192.168.1.10
+网络累计: 接收 2048 MB / 发送 1024 MB
 Top 5 进程:
 - PID=1234 Name=java CPU=88.12% RSS=2048MB
 
 主人，报告在这里喵：
 
-喵呜，当前主机已经明显过热，Java 进程正在持续吞噬 CPU，需要优先排查这个进程的线程与 GC 状态。
+[一句话结论]
+喵呜，当前主机已经明显过热，Java 进程正在持续吞噬 CPU。
+
+[风险判断]
+存在 CPU 长时间打满与内存逼近上限的风险。
+
+[排查建议]
+- 优先查看 Java 线程栈与 GC 状态
+- 检查是否存在突发流量或异常任务
+
+[必要命令]
+```bash
+ps -p 1234 -o pid,ppid,cmd,%cpu,%mem
+```
 ```
 
 ## 配置说明
@@ -222,39 +253,41 @@ set OPS_AGENT_MODEL=deepseek-chat
 ├── main.go                     # 程序入口
 ├── cmd/
 │   ├── root.go                 # 根命令与全局初始化
-│   ├── ask.go                  # 运维问答命令（当前为占位实现）
-│   └── diag.go                 # 主机诊断命令（当前为占位实现）
+│   ├── ask.go                  # 运维问答命令
+│   ├── deps.go                 # 命令层依赖注入与测试替身入口
+│   ├── diag.go                 # 主机诊断命令
+│   └── integration_test.go     # CLI 与 LLM 流程集成测试
 └── internal/
     ├── config/config.go        # 配置加载、默认值、环境变量覆盖
-    ├── llm/client.go           # LLM 客户端基础结构
-    ├── prompt/templates.go     # 系统提示词模板
-    ├── sysinfo/sysinfo.go      # 系统信息数据结构
-    └── executor/executor.go    # 执行计划与命令提取入口
+    ├── llm/client.go           # LLM 客户端与真实聊天请求
+    ├── prompt/templates.go     # 系统提示词与结构化 Prompt 模板
+    ├── sysinfo/sysinfo.go      # 系统信息采集与摘要输出
+    └── executor/executor.go    # 执行计划、风险分级与安全确认
 ```
 
 ## 当前实现状态总结
 
 如果从工程成熟度来看，当前仓库已经从“骨架阶段”进入“**基础能力可用、可继续增强体验与安全策略**”的状态：
 
-- **已完成**：命令组织、配置体系、真实 LLM 请求、系统指标采集、诊断链路、命令提取与安全审查、终端人格化展示
-- **部分完成**：整体功能已可用，但文档、测试覆盖率与更多诊断规则仍有继续完善空间
-- **未完成**：更细粒度的结构化诊断输出、更丰富的 Linux 指标采集、更完善的集成测试
+- **已完成**：命令组织、配置体系、真实 LLM 请求、扩展系统指标采集、结构化诊断链路、命令提取与安全审查、风险分级二次确认、终端人格化展示、单元测试与 CLI/LLM 集成测试
+- **部分完成**：整体功能已可用，但更多诊断规则、更细粒度风险策略与更丰富的运行示例仍可继续完善
+- **未完成**：更细粒度的诊断结构化消费、更丰富的 Linux 指标采集、真实环境下的端到端测试场景
 
 这意味着当前仓库已经具备继续向“更强诊断能力”和“更稳定执行体验”演进的基础，下一步可以优先考虑：
 
-1. 扩展 [`internal/sysinfo/sysinfo.go`](internal/sysinfo/sysinfo.go) 采集磁盘、负载、网络等更多系统指标
-2. 为 [`cmd/diag.go`](cmd/diag.go) 增加更细粒度的异常识别与结构化输出
-3. 为 [`internal/executor/executor.go`](internal/executor/executor.go) 增加更多命令白名单规则和测试覆盖
+1. 为 [`cmd/diag.go`](cmd/diag.go:19) 增加更细粒度的异常识别与结构化结果消费
+2. 为 [`internal/executor/executor.go`](internal/executor/executor.go:14) 增加更多命令白名单规则与更精细的风险策略
+3. 为 [`cmd/integration_test.go`](cmd/integration_test.go) 扩展更多失败路径与异常场景测试
 4. 完善 [`README.md`](README.md) 的截图、示例输出与配置说明
-5. 增加集成测试与模拟 LLM Provider 的测试场景
+5. 增加真实 Linux 环境下的端到端验证方案
 
-## 适合作为下一步迭代的方向
+## 当前功能总结
 
-- 接入实际 LLM Provider HTTP 调用
-- 增加 Linux 主机指标采集
-- 为诊断结果增加结构化输出
-- 提供安全的命令执行确认机制
-- 增加单元测试与集成测试
+- 已支持通过 [`internal/llm/client.go`](internal/llm/client.go) 访问兼容 OpenAI Chat Completions 的模型服务
+- 已支持通过 [`cmd/ask.go`](cmd/ask.go:18) 发起运维问答，并提取回复中的安全命令建议
+- 已支持通过 [`cmd/diag.go`](cmd/diag.go:19) 采集 Linux 主机快照、日志、OOM 线索与体感提示，生成结构化诊断结果
+- 已支持通过 [`internal/executor/executor.go`](internal/executor/executor.go) 对命令做白名单审查、风险分级与二次确认
+- 已具备覆盖 Prompt、系统采集、命令执行链路、CLI/LLM 主流程的测试体系
 
 ---
 

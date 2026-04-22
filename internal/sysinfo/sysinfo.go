@@ -3,6 +3,7 @@ package sysinfo
 import (
 	"bytes"
 	"fmt"
+	stdnet "net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -11,15 +12,27 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
+	psnet "github.com/shirou/gopsutil/v3/net"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
 type Snapshot struct {
 	CPUUsagePercent float64
+	Load1           float64
+	Load5           float64
+	Load15          float64
 	MemoryUsedMB    uint64
 	MemoryTotalMB   uint64
 	MemoryFreeMB    uint64
+	DiskUsedGB      uint64
+	DiskTotalGB     uint64
+	DiskFreeGB      uint64
+	PrimaryIP       string
+	NetworkRxMB     uint64
+	NetworkTxMB     uint64
 	TopProcesses    []ProcessInfo
 }
 
@@ -41,6 +54,12 @@ func CollectSnapshot() (Snapshot, error) {
 		result.CPUUsagePercent = cpuPercent[0]
 	}
 
+	if avg, err := load.Avg(); err == nil {
+		result.Load1 = avg.Load1
+		result.Load5 = avg.Load5
+		result.Load15 = avg.Load15
+	}
+
 	v, err := mem.VirtualMemory()
 	if err != nil {
 		return result, err
@@ -48,6 +67,18 @@ func CollectSnapshot() (Snapshot, error) {
 	result.MemoryUsedMB = v.Used / 1024 / 1024
 	result.MemoryTotalMB = v.Total / 1024 / 1024
 	result.MemoryFreeMB = v.Available / 1024 / 1024
+
+	if usage, err := disk.Usage("/"); err == nil {
+		result.DiskUsedGB = usage.Used / 1024 / 1024 / 1024
+		result.DiskTotalGB = usage.Total / 1024 / 1024 / 1024
+		result.DiskFreeGB = usage.Free / 1024 / 1024 / 1024
+	}
+
+	result.PrimaryIP = detectPrimaryIP()
+	if counters, err := psnet.IOCounters(false); err == nil && len(counters) > 0 {
+		result.NetworkRxMB = counters[0].BytesRecv / 1024 / 1024
+		result.NetworkTxMB = counters[0].BytesSent / 1024 / 1024
+	}
 
 	processes, err := process.Processes()
 	if err != nil {
@@ -83,12 +114,46 @@ func CollectSnapshot() (Snapshot, error) {
 func (s Snapshot) Summary() string {
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("CPU负载: %.2f%%\n", s.CPUUsagePercent))
+	builder.WriteString(fmt.Sprintf("系统负载: load1=%.2f load5=%.2f load15=%.2f\n", s.Load1, s.Load5, s.Load15))
 	builder.WriteString(fmt.Sprintf("内存: 已用 %d MB / 总计 %d MB / 可用 %d MB\n", s.MemoryUsedMB, s.MemoryTotalMB, s.MemoryFreeMB))
+	builder.WriteString(fmt.Sprintf("磁盘(/): 已用 %d GB / 总计 %d GB / 可用 %d GB\n", s.DiskUsedGB, s.DiskTotalGB, s.DiskFreeGB))
+	if strings.TrimSpace(s.PrimaryIP) != "" {
+		builder.WriteString(fmt.Sprintf("主机地址: %s\n", s.PrimaryIP))
+	}
+	builder.WriteString(fmt.Sprintf("网络累计: 接收 %d MB / 发送 %d MB\n", s.NetworkRxMB, s.NetworkTxMB))
 	builder.WriteString("Top 5 进程:\n")
 	for _, p := range s.TopProcesses {
 		builder.WriteString(fmt.Sprintf("- PID=%d Name=%s CPU=%.2f%% RSS=%dMB\n", p.PID, p.Name, p.CPU, p.Memory))
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func detectPrimaryIP() string {
+	interfaces, err := stdnet.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range interfaces {
+		if (iface.Flags&stdnet.FlagUp) == 0 || (iface.Flags&stdnet.FlagLoopback) != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*stdnet.IPNet)
+			if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
+				continue
+			}
+			ip := ipNet.IP.To4()
+			if ip == nil {
+				continue
+			}
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 func ReadRecentLogs(lines int) (string, error) {
